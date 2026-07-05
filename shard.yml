@@ -1,0 +1,21 @@
+name: crysim
+version: 0.4.0
+description: A Simulink-inspired block-diagram simulation library for Crystal, built on cryspace, num.cr and eeeval.
+
+authors:
+  - eltony81 <antonio.difluri@gmail.com>
+
+homepage: https://github.com/eltony81/crysim
+repository: https://github.com/eltony81/crysim
+
+crystal: ">= 1.20.2"
+
+license: MIT
+
+dependencies:
+  cryspace:
+    github: eltony81/cryspace
+    version: 1.28.0
+  eeeval:
+    github: eltony81/easy_expression_eval
+    version: 1.1.1
