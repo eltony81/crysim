@@ -146,6 +146,83 @@ module CrySim
       end
     end
 
+    # Parametric state-space block (PIANO_STATESPACE.md, Fase 5): matrix
+    # entries as eeeval expressions of named parameters instead of literal
+    # numbers, each compiled and evaluated once at build time against
+    # `params` — the very same Hash(Symbol, Float64) that `use` binds for
+    # parametric subsystems (see #use above), so a subsystem template can
+    # forward its own `params` straight through:
+    #
+    #   spring_mass = CrySim.subsystem("spring_mass") do |sub, params|
+    #     sub.ss :dynamics, a: [["0", "1"], ["-k/m", "-c/m"]], b: [["0"], ["1/m"]],
+    #            c: [["1", "0"]], d: [["0"]], params: params
+    #     sub.inport  :force,    to: :dynamics
+    #     sub.outport :position, from: :dynamics
+    #   end
+    #   use spring_mass, as: :m1, k: 40.0, m: 2.0, c: 0.5
+    #
+    # or standalone, with a literal params hash and no subsystem at all:
+    #
+    #   ss :spring_mass, a: [["0", "1"], ["-k/m", "-c/m"]], b: [["0"], ["1/m"]],
+    #      c: [["1", "0"]], d: [["0"]], params: {k: 40.0, m: 2.0, c: 0.5}
+    #
+    # x0/state_names/output_names stay literal — only the matrices are
+    # parametric, since those are what differ between instances of the same
+    # physical template.
+    def ss(id : Symbol, *, a : Array(Array(String)), b : Array(Array(String)),
+           c : Array(Array(String)), d : Array(Array(String)), params : Hash(Symbol, Float64),
+           x0 : Array(Float64)? = nil, state_names : Array(Symbol)? = nil, output_names : Array(Symbol)? = nil)
+      env = param_env(params)
+      sys = CrySpace::StateSpace.new(
+        eval_matrix(id, a, env).to_tensor, eval_matrix(id, b, env).to_tensor,
+        eval_matrix(id, c, env).to_tensor, eval_matrix(id, d, env).to_tensor)
+      add_block(Blocks::StateSpaceBlock.new(prefixed(id), sys, x0: x0, state_names: state_names, output_names: output_names))
+    end
+
+    # Convenience overload for standalone use (outside any subsystem body):
+    # `params:` as a NamedTuple literal — `params: {k: 40.0, m: 2.0, c: 0.5}`,
+    # exactly as written in PIANO_STATESPACE.md's Fase 5 — instead of the
+    # Hash(Symbol, Float64) a subsystem template already has on hand and
+    # forwards directly to the overload above. Kept separate from a plain
+    # `**params` double-splat on purpose: a physical parameter is very
+    # plausibly named `a`, `b`, `c`, `d` or `x0` (the spring-mass-damper
+    # example literally has a `c` for damping), which would collide with
+    # this method's own matrix keywords.
+    def ss(id : Symbol, *, a : Array(Array(String)), b : Array(Array(String)),
+           c : Array(Array(String)), d : Array(Array(String)), params : NamedTuple,
+           x0 : Array(Float64)? = nil, state_names : Array(Symbol)? = nil, output_names : Array(Symbol)? = nil)
+      hash = {} of Symbol => Float64
+      params.each { |k, v| hash[k] = v.to_f64 }
+      ss(id, a: a, b: b, c: c, d: d, params: hash, x0: x0, state_names: state_names, output_names: output_names)
+    end
+
+    # Shared by the parametric `ss` overload above: params, plus the same
+    # named constants (pi, e, ...) every other eeeval expression in CrySim
+    # (signal/fn `expr:`) already gets via EEEval::Constants::DEFAULT_ENV.
+    private def param_env(params : Hash(Symbol, Float64)) : Hash(String, Float64)
+      env = EEEval::Constants::DEFAULT_ENV.dup
+      params.each { |k, v| env[k.to_s] = v }
+      env
+    end
+
+    # Compiles and evaluates every cell of a matrix of eeeval expressions
+    # once (matrices are static for an LTI system — no per-step
+    # re-evaluation like signal/fn's `expr:` needs). Wraps eeeval's raw
+    # "Undefined variable" exception in a ModelError naming the offending
+    # block and expression, so a typo'd or missing param reads like the
+    # rest of CrySim's builder errors instead of a bare eeeval message.
+    private def eval_matrix(id : Symbol, matrix : Array(Array(String)), env : Hash(String, Float64)) : Array(Array(Float64))
+      matrix.map do |row|
+        row.map do |expr|
+          begin
+            EEEval::CalcFuncParser.compile(expr).evaluate(env)
+          rescue ex
+            raise ModelError.new("ss :#{id}: invalid matrix expression '#{expr}': #{ex.message}")
+          end
+        end
+      end
+    end
+
     # explicit discrete state-space block from matrices, sampled at dt:
     # x[k+1] = Ax[k] + Bu[k], y[k] = Cx[k] + Du[k].
     def dss(id : Symbol, *, a : Array(Array(Float64)), b : Array(Array(Float64)),

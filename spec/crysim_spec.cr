@@ -689,6 +689,73 @@ describe CrySim do
     end
   end
 
+  describe "PIANO_STATESPACE.md Fase 5: parametric ss matrices" do
+    it "ss with eeeval expression matrices + params matches the literal-matrix build" do
+      k, m, c = 40.0, 2.0, 0.5
+      literal = CrySim.model "spring_literal" do
+        duration 2.0
+        dt 0.001
+        step :force, amplitude: 1.0
+        ss :dynamics, a: [[0.0, 1.0], [-k/m, -c/m]], b: [[0.0], [1.0/m]], c: [[1.0, 0.0]], d: [[0.0]]
+        scope :out
+        connect :force, to: :dynamics
+        connect :dynamics, to: :out, as: :position
+      end
+      parametric = CrySim.model "spring_parametric" do
+        duration 2.0
+        dt 0.001
+        step :force, amplitude: 1.0
+        ss :dynamics, a: [["0", "1"], ["-k/m", "-c/m"]], b: [["0"], ["1/m"]], c: [["1", "0"]], d: [["0"]],
+           params: {k: 40.0, m: 2.0, c: 0.5}
+        scope :out
+        connect :force, to: :dynamics
+        connect :dynamics, to: :out, as: :position
+      end
+
+      lit = literal.run[:position]
+      par = parametric.run[:position]
+      lit.each_with_index { |v, i| par[i].should be_close(v, 1e-12) }
+    end
+
+    it "forwards a subsystem's own params hash straight into ss's matrix expressions" do
+      spring_mass = CrySim.subsystem("spring_mass_damper") do |sub, params|
+        sub.ss :dynamics, a: [["0", "1"], ["-k/m", "-c/m"]], b: [["0"], ["1/m"]], c: [["1", "0"]], d: [["0"]],
+               params: params
+        sub.inport :force, to: :dynamics
+        sub.outport :position, from: :dynamics
+      end
+
+      model = CrySim.model "two_springs" do
+        duration 3.0
+        dt 0.001
+        step :f, amplitude: 1.0
+        use spring_mass, as: :stiff, k: 100.0, m: 1.0, c: 20.0
+        use spring_mass, as: :soft, k: 10.0, m: 1.0, c: 6.0
+        scope :out
+        connect :f, to: :stiff
+        connect :f, to: :soft
+        connect :stiff, to: :out, as: :stiff_pos
+        connect :soft, to: :out, as: :soft_pos
+      end
+
+      result = model.run
+      result[:stiff_pos].last.should be_close(1.0 / 100.0, 1e-3)
+      result[:soft_pos].last.should be_close(1.0 / 10.0, 1e-3)
+    end
+
+    it "raises a ModelError naming the block and expression for an undefined parameter" do
+      expect_raises(CrySim::ModelError, /dynamics.*-k\/q.*[Uu]ndefined/) do
+        CrySim.model "broken_params" do
+          duration 0.1
+          dt 0.01
+          step :force
+          ss :dynamics, a: [["0", "1"], ["-k/q", "-c/m"]], b: [["0"], ["1/m"]], c: [["1", "0"]], d: [["0"]],
+             params: {k: 40.0, m: 2.0, c: 0.5}
+        end
+      end
+    end
+  end
+
   describe "v0.2: unified report with sparklines" do
     it "combines the diagram (with sparklines) and the plot panels, with no overlaps" do
       model = CrySim.model "report_check" do

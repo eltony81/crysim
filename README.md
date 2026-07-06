@@ -291,6 +291,7 @@ crystal run examples/05_custom_block.cr         # extending CrySim with a custom
 crystal run examples/06_v02_features.cr         # >> chain, feedback sugar, subsystems, unified report
 crystal run examples/07_v03_features.cr         # LTI fast-path, discretize, unit_delay, switch, multi-rate
 crystal run examples/08_piano_features.cr       # lookup_table, rate_limiter, NaN/Inf detection
+crystal run examples/09_piano_fase5.cr          # parametric ss: matrices as eeeval expressions + params:
 crystal spec                                    # validated against analytic responses
 ```
 

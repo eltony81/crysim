@@ -1,12 +1,15 @@
 # CrySim — Piano di sviluppo: definizione di sistemi via spazio degli stati (A, B, C, D)
 
-> **Stato**: tutte e 4 le fasi sono implementate (2026-07-04). Guardia `dt` su `StateSpaceBlock`,
+> **Stato**: tutte e 5 le fasi sono implementate (2026-07-06). Guardia `dt` su `StateSpaceBlock`,
 > overload `ss(id, sys:)` con dispatch automatico continuo/discreto, blocco `dss` con doppio
 > buffer di stato (`@x`/`@x_next` + `commit_sample`, per non far trapelare x[k+1] nel passo che
 > lo calcola — bug individuato e corretto durante l'implementazione), `Model#state_space_of`,
 > `state_names:`/`output_names:` con log automatico per-stato (ruolo `:state`) e tooltip SVG
-> leggibili. 20 spec verdi, vedi `spec/crysim_spec.cr`. Fase 5 (matrici parametriche) resta
-> bloccata dai sottosistemi parametrici, non ancora implementati.
+> leggibili, e (Fase 5) `ss` con matrici come espressioni eeeval + `params:` — un
+> `Hash(Symbol, Float64)` o un `NamedTuple` letterale, lo stesso meccanismo di binding già usato
+> da `use` per i sottosistemi parametrici, verso cui `params:` viene tipicamente inoltrato
+> direttamente (`sub.ss ..., params: params`). Esempi commentati in `examples/09_piano_fase5.cr`.
+> 23 spec verdi, vedi `spec/crysim_spec.cr`.
 
 Piano verticale focalizzato sul blocco `ss` e sulla sua integrazione con `CrySpace::StateSpace`,
 complementare al backlog generale in `PIANO_FEATURE.md` (in particolare le voci di area B
@@ -105,12 +108,20 @@ Obiettivo: rendere `ss` sicuro e comodo quanto `tf` prima di aggiungere qualunqu
 - Nessuna modifica al motore: è puro arricchimento di metadata sopra un meccanismo (log
   entries, tooltip) già esistente.
 
-## Fase 5 — Costruzione parametrica (dipende dai sottosistemi di `PIANO_FEATURE.md` §A)
+## Fase 5 — Costruzione parametrica ✅
 
-- Voci delle matrici come espressioni eeeval quando il sistema fa parte di un sottosistema
-  parametrico: `ss :spring_mass, a: [["-k/m", "-c/m"], [1, 0]], params: {k: 40.0, m: 2.0, c: 0.5}`.
-  Da valutare solo dopo che i sottosistemi parametrici (`use motor_stage, k: ..., tau: ...`)
-  sono implementati, perché il meccanismo di binding dei parametri è lo stesso.
+- **Implementato**: `ss` accetta un overload con matrici come array di stringhe (espressioni
+  eeeval, es. `"-k/m"`) più `params:` — un `Hash(Symbol, Float64)` (quello che un template
+  `CrySim.subsystem` già riceve e può inoltrare così com'è: `sub.ss ..., params: params`), oppure
+  un `NamedTuple` letterale per l'uso standalone fuori da un sottosistema
+  (`params: {k: 40.0, m: 2.0, c: 0.5}`, esattamente come nell'esempio originale di questo piano).
+  Ogni cella viene compilata e valutata una sola volta in fase di costruzione (le matrici di un
+  sistema LTI sono statiche, a differenza di `signal`/`fn` che rivalutano `expr:` ad ogni passo).
+  Un parametro non definito nell'espressione solleva un `ModelError` che nomina blocco ed
+  espressione, non la `Exception` grezza di eeeval. `x0`/`state_names`/`output_names` restano
+  letterali: solo le matrici A/B/C/D sono parametriche, perché sono l'unica cosa che cambia da
+  un'istanza all'altra dello stesso template fisico. Vedi `examples/09_piano_fase5.cr` per un uso
+  standalone e uno dentro un sottosistema parametrico instanziato due volte con valori diversi.
 
 ---
 
