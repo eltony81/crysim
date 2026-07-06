@@ -19,10 +19,11 @@ block do I want" decision guides — see [README.md](README.md). This document i
 6. [Discrete time and multi-rate](#6-discrete-time-and-multi-rate)
 7. [Nonlinearities and logic](#7-nonlinearities-and-logic)
 8. [Reusable subsystems](#8-reusable-subsystems)
-9. [Reports and diagnostics](#9-reports-and-diagnostics)
-10. [The fast-path: when a model can skip the general engine](#10-the-fast-path-when-a-model-can-skip-the-general-engine)
-11. [Writing your own block](#11-writing-your-own-block)
-12. [Where to go next](#12-where-to-go-next)
+9. [Parametric state-space matrices](#9-parametric-state-space-matrices)
+10. [Reports and diagnostics](#10-reports-and-diagnostics)
+11. [The fast-path: when a model can skip the general engine](#11-the-fast-path-when-a-model-can-skip-the-general-engine)
+12. [Writing your own block](#12-writing-your-own-block)
+13. [Where to go next](#13-where-to-go-next)
 
 ---
 
@@ -328,7 +329,64 @@ name; from the outside, the instance name itself (`:m1`) acts as a single input/
 port. v0.3's subsystems are SISO (exactly one inport, one outport per template) — see the
 README's Roadmap for what's planned beyond that.
 
-## 9. Reports and diagnostics
+## 9. Parametric state-space matrices
+
+Chapter 8's `motor` template hard-codes `params[:k]`/`params[:tau]` directly into a
+`tf`'s Crystal-literal `num:`/`den:` arrays. For an `ss` block that's often more
+convenient the other way around: write the A/B/C/D entries as **expressions** of the
+parameter names, and let `ss` compile and evaluate each cell once at build time. Same
+`params` hash `use` already binds per instance — just forwarded straight through.
+
+```crystal
+require "crysim"
+
+# Every matrix entry is a string: a plain number, or an eeeval expression
+# of the template's own parameter names (m, k, c below).
+spring_mass = CrySim.subsystem("spring_mass_damper") do |sub, params|
+  # m*x'' + c*x' + k*x = F(t), state = [position, velocity]
+  sub.ss :dynamics, a: [["0", "1"], ["-k/m", "-c/m"]], b: [["0"], ["1/m"]],
+                    c: [["1", "0"]], d: [["0"]], params: params
+  sub.inport  :force,    to: :dynamics
+  sub.outport :position, from: :dynamics
+end
+
+model = CrySim.model "two_springs" do
+  duration 3.0
+  dt 0.001
+  step :f, amplitude: 1.0
+  # Same template, two different physical instances — nothing about the
+  # matrices themselves is rewritten between them.
+  use spring_mass, as: :stiff, k: 100.0, m: 1.0, c: 20.0
+  use spring_mass, as: :soft,  k: 10.0,  m: 1.0, c: 6.0
+  scope :out
+  connect :f, to: :stiff
+  connect :f, to: :soft
+  connect :stiff, to: :out, as: :stiff_pos
+  connect :soft,  to: :out, as: :soft_pos
+end
+
+result = model.run
+puts result[:stiff_pos].last.round(4) # settles near 1/k = 0.01
+puts result[:soft_pos].last.round(4)  # settles near 1/k = 0.1
+```
+
+`ss` also takes `params:` as a plain literal hash outside a subsystem, exactly like the
+example above minus the template — handy for a one-off system where writing `-k/m`
+directly is clearer than pre-computing the number by hand:
+
+```crystal
+ss :spring_mass, a: [["0", "1"], ["-k/m", "-c/m"]], b: [["0"], ["1/m"]],
+                 c: [["1", "0"]], d: [["0"]], params: {k: 40.0, m: 2.0, c: 0.5}
+```
+
+Each cell is compiled and evaluated exactly once, at build time — unlike `signal`/`fn`'s
+`expr:`, which re-evaluates every solver step, matrix entries here are static, since the
+system itself is LTI. A typo or a parameter the template forgot to bind (`params:
+{k: 40.0}` with no `m`) raises a `CrySim::ModelError` naming the block and the offending
+expression, not a bare eeeval exception. See `examples/09_piano_fase5.cr` for the
+full runnable version, including that error case.
+
+## 10. Reports and diagnostics
 
 `model.render`/`result.plot` are useful separately; `report` combines them — the block
 diagram, with a small sparkline of each wire's own signal next to its label, followed by
@@ -361,7 +419,7 @@ rescue err : CrySim::NonFiniteValueError
 end
 ```
 
-## 10. The fast-path: when a model can skip the general engine
+## 11. The fast-path: when a model can skip the general engine
 
 If a model happens to be *exactly* one source feeding a simple chain of continuous, SISO
 `ss`/`dss`/`tf` blocks into one sink — no branching, no feedback, nothing else — CrySim
@@ -392,7 +450,7 @@ path) don't qualify — `run_fast`/`to_state_space` will say exactly why not rat
 silently falling back to the general engine. Treat it as a speed option for that one
 shape, not a replacement for `model.run`.
 
-## 11. Writing your own block
+## 12. Writing your own block
 
 When nothing built in fits, subclass `CrySim::Block` — the same interface every built-in
 block implements — and register an instance with `block`:
@@ -422,14 +480,14 @@ end
 `src/crysim/block.cr`'s doc comments for the full contract, and
 `examples/05_custom_block.cr` for a complete, runnable version of this example.
 
-## 12. Where to go next
+## 13. Where to go next
 
 - [README.md](README.md) — the reference: every built-in block, the "which one do I
   want" decision tables (sources, `probe` vs. `scope`, `connect` vs. `>>` vs. `feedback`,
   continuous dynamics, `switch` modes), installation, and the full roadmap.
-- `examples/` — eight complete, runnable programs, each focused on a specific slice of
+- `examples/` — nine complete, runnable programs, each focused on a specific slice of
   the library (PID control, signal sources, state-space, saturation/anti-windup, custom
-  blocks, and the v0.2/v0.3/robustness feature tours).
+  blocks, the v0.2/v0.3/robustness feature tours, and parametric `ss` matrices).
 - `spec/crysim_spec.cr` — every behavior described in this tutorial and the README is
   backed by a spec, cross-checked in several places against analytic solutions and
   against cryspace's own `step_response`/`impulse_response`.
